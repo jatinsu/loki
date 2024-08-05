@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"math"
 	"math/rand"
 	"sort"
@@ -99,7 +100,6 @@ func TestBlocksInclusive(t *testing.T) {
 			require.Equal(t, 1, blocks[0].Entries())
 		}
 	}
-
 }
 
 func TestBlock(t *testing.T) {
@@ -194,7 +194,7 @@ func TestBlock(t *testing.T) {
 
 				idx := 0
 				for it.Next() {
-					e := it.Entry()
+					e := it.At()
 					require.Equal(t, cases[idx].ts, e.Timestamp.UnixNano())
 					require.Equal(t, cases[idx].str, e.Line)
 					if chunkFormat < ChunkFormatV4 {
@@ -211,7 +211,7 @@ func TestBlock(t *testing.T) {
 					idx++
 				}
 
-				require.NoError(t, it.Error())
+				require.NoError(t, it.Err())
 				require.NoError(t, it.Close())
 				require.Equal(t, len(cases), idx)
 
@@ -226,14 +226,14 @@ func TestBlock(t *testing.T) {
 				sampleIt := chk.SampleIterator(context.Background(), time.Unix(0, 0), time.Unix(0, math.MaxInt64), countExtractor)
 				idx = 0
 				for sampleIt.Next() {
-					s := sampleIt.Sample()
+					s := sampleIt.At()
 					require.Equal(t, cases[idx].ts, s.Timestamp)
 					require.Equal(t, 1., s.Value)
 					require.NotEmpty(t, s.Hash)
 					idx++
 				}
 
-				require.NoError(t, sampleIt.Error())
+				require.NoError(t, sampleIt.Err())
 				require.NoError(t, sampleIt.Close())
 				require.Equal(t, len(cases), idx)
 
@@ -243,12 +243,12 @@ func TestBlock(t *testing.T) {
 
 					idx := 2
 					for it.Next() {
-						e := it.Entry()
+						e := it.At()
 						require.Equal(t, cases[idx].ts, e.Timestamp.UnixNano())
 						require.Equal(t, cases[idx].str, e.Line)
 						idx++
 					}
-					require.NoError(t, it.Error())
+					require.NoError(t, it.Err())
 					require.Equal(t, 6, idx)
 				})
 			})
@@ -287,7 +287,7 @@ func TestCorruptChunk(t *testing.T) {
 					for it.Next() {
 						idx++
 					}
-					require.Error(t, it.Error(), "case %d", i)
+					require.Error(t, it.Err(), "case %d", i)
 					require.NoError(t, it.Close())
 				}
 			})
@@ -321,8 +321,8 @@ func TestReadFormatV1(t *testing.T) {
 
 	i := int64(0)
 	for it.Next() {
-		require.Equal(t, i, it.Entry().Timestamp.UnixNano())
-		require.Equal(t, testdata.LogString(i), it.Entry().Line)
+		require.Equal(t, i, it.At().Timestamp.UnixNano())
+		require.Equal(t, testdata.LogString(i), it.At().Line)
 
 		i++
 	}
@@ -354,10 +354,10 @@ func TestRoundtripV2(t *testing.T) {
 					i := int64(0)
 					var data int64
 					for it.Next() {
-						require.Equal(t, i, it.Entry().Timestamp.UnixNano())
-						require.Equal(t, testdata.LogString(i), it.Entry().Line)
+						require.Equal(t, i, it.At().Timestamp.UnixNano())
+						require.Equal(t, testdata.LogString(i), it.At().Line)
 
-						data += int64(len(it.Entry().Line))
+						data += int64(len(it.At().Line))
 						i++
 					}
 					require.Equal(t, populated, data)
@@ -387,7 +387,6 @@ func TestRoundtripV2(t *testing.T) {
 				assertLines(loaded)
 			})
 		}
-
 	}
 }
 
@@ -462,7 +461,7 @@ func TestSerialization(t *testing.T) {
 					for i := 0; i < numSamples; i++ {
 						require.True(t, it.Next())
 
-						e := it.Entry()
+						e := it.At()
 						require.Equal(t, int64(i), e.Timestamp.UnixNano())
 						require.Equal(t, strconv.Itoa(i), e.Line)
 						if appendWithStructuredMetadata && testData.chunkFormat >= ChunkFormatV4 {
@@ -473,7 +472,7 @@ func TestSerialization(t *testing.T) {
 							require.Nil(t, e.StructuredMetadata)
 						}
 					}
-					require.NoError(t, it.Error())
+					require.NoError(t, it.Err())
 
 					extractor := func() log.StreamSampleExtractor {
 						ex, err := log.NewLineSampleExtractor(log.CountExtractor, nil, nil, false, false)
@@ -487,7 +486,7 @@ func TestSerialization(t *testing.T) {
 					for i := 0; i < numSamples; i++ {
 						require.True(t, sampleIt.Next(), i)
 
-						s := sampleIt.Sample()
+						s := sampleIt.At()
 						require.Equal(t, int64(i), s.Timestamp)
 						require.Equal(t, 1., s.Value)
 						if appendWithStructuredMetadata && testData.chunkFormat >= ChunkFormatV4 {
@@ -496,7 +495,7 @@ func TestSerialization(t *testing.T) {
 							require.Equal(t, labels.EmptyLabels().String(), sampleIt.Labels())
 						}
 					}
-					require.NoError(t, sampleIt.Error())
+					require.NoError(t, sampleIt.Err())
 
 					byt2, err := chk.Bytes()
 					require.NoError(t, err)
@@ -544,7 +543,7 @@ func TestChunkFilling(t *testing.T) {
 				require.NoError(t, err)
 				i = 0
 				for it.Next() {
-					entry := it.Entry()
+					entry := it.At()
 					require.Equal(t, i, entry.Timestamp.UnixNano())
 					i++
 				}
@@ -810,7 +809,7 @@ func TestIteratorClose(t *testing.T) {
 					func(iter iter.EntryIterator, t *testing.T) {
 						// close after iterating
 						for iter.Next() {
-							_ = iter.Entry()
+							_ = iter.At()
 						}
 						if err := iter.Close(); err != nil {
 							t.Fatal(err)
@@ -819,7 +818,7 @@ func TestIteratorClose(t *testing.T) {
 					func(iter iter.EntryIterator, t *testing.T) {
 						// close after a single iteration
 						iter.Next()
-						_ = iter.Entry()
+						_ = iter.At()
 						if err := iter.Close(); err != nil {
 							t.Fatal(err)
 						}
@@ -886,9 +885,11 @@ func (nomatchPipeline) BaseLabels() log.LabelsResult { return log.EmptyLabelsRes
 func (nomatchPipeline) Process(_ int64, line []byte, _ ...labels.Label) ([]byte, log.LabelsResult, bool) {
 	return line, nil, false
 }
+
 func (nomatchPipeline) ProcessString(_ int64, line string, _ ...labels.Label) (string, log.LabelsResult, bool) {
 	return line, nil, false
 }
+
 func (nomatchPipeline) ReferencedStructuredMetadata() bool {
 	return false
 }
@@ -909,7 +910,7 @@ func BenchmarkRead(b *testing.B) {
 							panic(err)
 						}
 						for iterator.Next() {
-							_ = iterator.Entry()
+							_ = iterator.At()
 						}
 						if err := iterator.Close(); err != nil {
 							b.Fatal(err)
@@ -933,7 +934,7 @@ func BenchmarkRead(b *testing.B) {
 					for _, c := range chunks {
 						iterator := c.SampleIterator(ctx, time.Unix(0, 0), time.Now(), countExtractor)
 						for iterator.Next() {
-							_ = iterator.Sample()
+							_ = iterator.At()
 						}
 						if err := iterator.Close(); err != nil {
 							b.Fatal(err)
@@ -947,21 +948,36 @@ func BenchmarkRead(b *testing.B) {
 	}
 }
 
+type noopTestPipeline struct{}
+
+func (noopTestPipeline) BaseLabels() log.LabelsResult { return log.EmptyLabelsResult }
+func (noopTestPipeline) Process(_ int64, line []byte, _ ...labels.Label) ([]byte, log.LabelsResult, bool) {
+	return line, nil, false
+}
+
+func (noopTestPipeline) ProcessString(_ int64, line string, _ ...labels.Label) (string, log.LabelsResult, bool) {
+	return line, nil, false
+}
+
+func (noopTestPipeline) ReferencedStructuredMetadata() bool {
+	return false
+}
+
 func BenchmarkBackwardIterator(b *testing.B) {
 	for _, bs := range testBlockSizes {
 		b.Run(humanize.Bytes(uint64(bs)), func(b *testing.B) {
 			b.ReportAllocs()
-			c := NewMemChunk(ChunkFormatV3, EncSnappy, DefaultTestHeadBlockFmt, bs, testTargetSize)
+			c := NewMemChunk(ChunkFormatV4, EncSnappy, DefaultTestHeadBlockFmt, bs, testTargetSize)
 			_ = fillChunk(c)
 			b.ResetTimer()
 			for n := 0; n < b.N; n++ {
-				noopStreamPipeline := log.NewNoopPipeline().ForStream(labels.Labels{})
-				iterator, err := c.Iterator(context.Background(), time.Unix(0, 0), time.Now(), logproto.BACKWARD, noopStreamPipeline)
+				noop := noopTestPipeline{}
+				iterator, err := c.Iterator(context.Background(), time.Unix(0, 0), time.Now(), logproto.BACKWARD, noop)
 				if err != nil {
 					panic(err)
 				}
 				for iterator.Next() {
-					_ = iterator.Entry()
+					_ = iterator.At()
 				}
 				if err := iterator.Close(); err != nil {
 					b.Fatal(err)
@@ -985,7 +1001,7 @@ func TestGenerateDataSize(t *testing.T) {
 					panic(err)
 				}
 				for iterator.Next() {
-					e := iterator.Entry()
+					e := iterator.At()
 					bytesRead += uint64(len(e.Line))
 				}
 				if err := iterator.Close(); err != nil {
@@ -1022,7 +1038,7 @@ func BenchmarkHeadBlockIterator(b *testing.B) {
 					iter := h.Iterator(context.Background(), logproto.BACKWARD, 0, math.MaxInt64, noopStreamPipeline)
 
 					for iter.Next() {
-						_ = iter.Entry()
+						_ = iter.At()
 					}
 				}
 			})
@@ -1053,7 +1069,7 @@ func BenchmarkHeadBlockSampleIterator(b *testing.B) {
 					iter := h.SampleIterator(context.Background(), 0, math.MaxInt64, countExtractor)
 
 					for iter.Next() {
-						_ = iter.Sample()
+						_ = iter.At()
 					}
 					iter.Close()
 				}
@@ -1302,7 +1318,7 @@ func BenchmarkBufferedIteratorLabels(b *testing.B) {
 					for n := 0; n < b.N; n++ {
 						for _, it := range iters {
 							for it.Next() {
-								streams = append(streams, logproto.Stream{Labels: it.Labels(), Entries: []logproto.Entry{it.Entry()}})
+								streams = append(streams, logproto.Stream{Labels: it.Labels(), Entries: []logproto.Entry{it.At()}})
 							}
 						}
 					}
@@ -1337,7 +1353,7 @@ func BenchmarkBufferedIteratorLabels(b *testing.B) {
 					for n := 0; n < b.N; n++ {
 						for _, it := range iters {
 							for it.Next() {
-								series = append(series, logproto.Series{Labels: it.Labels(), Samples: []logproto.Sample{it.Sample()}})
+								series = append(series, logproto.Series{Labels: it.Labels(), Samples: []logproto.Sample{it.At()}})
 							}
 						}
 					}
@@ -1374,7 +1390,7 @@ func Test_HeadIteratorReverse(t *testing.T) {
 				require.NoError(t, err)
 				for it.Next() {
 					total--
-					require.Equal(t, total, it.Entry().Timestamp.UnixNano())
+					require.Equal(t, total, it.At().Timestamp.UnixNano())
 				}
 			}
 
@@ -1459,7 +1475,7 @@ func TestMemChunk_Rebound(t *testing.T) {
 					break
 				}
 
-				require.Equal(t, originalChunkItr.Entry(), newChunkItr.Entry())
+				require.Equal(t, originalChunkItr.At(), newChunkItr.At())
 			}
 		})
 	}
@@ -1754,7 +1770,6 @@ func TestMemChunk_SpaceFor(t *testing.T) {
 					require.Equal(t, expect, chk.SpaceFor(&tc.entry))
 				})
 			}
-
 		})
 	}
 }
@@ -1975,8 +1990,8 @@ func TestMemChunk_IteratorWithStructuredMetadata(t *testing.T) {
 							var streams []string
 							var structuredMetadata [][]logproto.LabelAdapter
 							for it.Next() {
-								require.NoError(t, it.Error())
-								e := it.Entry()
+								require.NoError(t, it.Err())
+								e := it.At()
 								lines = append(lines, e.Line)
 								streams = append(streams, it.Labels())
 
@@ -2012,8 +2027,8 @@ func TestMemChunk_IteratorWithStructuredMetadata(t *testing.T) {
 							var sumValues int
 							var streams []string
 							for it.Next() {
-								require.NoError(t, it.Error())
-								e := it.Sample()
+								require.NoError(t, it.Err())
+								e := it.At()
 								sumValues += int(e.Value)
 								streams = append(streams, it.Labels())
 							}
@@ -2025,6 +2040,122 @@ func TestMemChunk_IteratorWithStructuredMetadata(t *testing.T) {
 							require.Equal(t, int64(expectedStructuredMetadataBytes), resultStats.Summary.TotalStructuredMetadataBytesProcessed)
 						}
 					})
+				})
+			}
+		})
+	}
+}
+
+func TestDecodeChunkIncorrectBlockOffset(t *testing.T) {
+	// use small block size to build multiple blocks in the test chunk
+	blockSize := 10
+
+	for _, format := range allPossibleFormats {
+		t.Run(fmt.Sprintf("chunkFormat:%v headBlockFmt:%v", format.chunkFormat, format.headBlockFmt), func(t *testing.T) {
+			for incorrectOffsetBlockNum := 0; incorrectOffsetBlockNum < 3; incorrectOffsetBlockNum++ {
+				t.Run(fmt.Sprintf("inorrect offset block: %d", incorrectOffsetBlockNum), func(t *testing.T) {
+					chk := NewMemChunk(format.chunkFormat, EncNone, format.headBlockFmt, blockSize, testTargetSize)
+					ts := time.Now().Unix()
+					for i := 0; i < 3; i++ {
+						dup, err := chk.Append(&logproto.Entry{
+							Timestamp: time.Now(),
+							Line:      fmt.Sprintf("%d-%d", ts, i),
+							StructuredMetadata: []logproto.LabelAdapter{
+								{Name: "foo", Value: fmt.Sprintf("%d-%d", ts, i)},
+							},
+						})
+						require.NoError(t, err)
+						require.False(t, dup)
+					}
+
+					require.Len(t, chk.blocks, 3)
+
+					b, err := chk.Bytes()
+					require.NoError(t, err)
+
+					metasOffset := binary.BigEndian.Uint64(b[len(b)-8:])
+
+					w := bytes.NewBuffer(nil)
+					eb := EncodeBufferPool.Get().(*encbuf)
+					defer EncodeBufferPool.Put(eb)
+
+					crc32Hash := crc32HashPool.Get().(hash.Hash32)
+					defer crc32HashPool.Put(crc32Hash)
+
+					crc32Hash.Reset()
+					eb.reset()
+
+					// BEGIN - code copied from writeTo func starting from encoding of block metas to change offset of a block
+					eb.putUvarint(len(chk.blocks))
+
+					for i, b := range chk.blocks {
+						eb.putUvarint(b.numEntries)
+						eb.putVarint64(b.mint)
+						eb.putVarint64(b.maxt)
+						// change offset of one block
+						blockOffset := b.offset
+						if i == incorrectOffsetBlockNum {
+							blockOffset += 5
+						}
+						eb.putUvarint(blockOffset)
+						if chk.format >= ChunkFormatV3 {
+							eb.putUvarint(b.uncompressedSize)
+						}
+						eb.putUvarint(len(b.b))
+					}
+					metasLen := len(eb.get())
+					eb.putHash(crc32Hash)
+
+					_, err = w.Write(eb.get())
+					require.NoError(t, err)
+
+					if chk.format >= ChunkFormatV4 {
+						// Write structured metadata offset and length
+						eb.reset()
+
+						eb.putBE64int(int(binary.BigEndian.Uint64(b[len(b)-32:])))
+						eb.putBE64int(int(binary.BigEndian.Uint64(b[len(b)-24:])))
+						_, err = w.Write(eb.get())
+						require.NoError(t, err)
+					}
+
+					// Write the metasOffset.
+					eb.reset()
+					if chk.format >= ChunkFormatV4 {
+						eb.putBE64int(metasLen)
+					}
+					eb.putBE64int(int(metasOffset))
+					_, err = w.Write(eb.get())
+					require.NoError(t, err)
+					// END - code copied from writeTo func
+
+					// build chunk using pre-block meta section + rewritten remainder of the chunk with incorrect offset for a block
+					chkWithIncorrectOffset := make([]byte, int(metasOffset)+w.Len())
+					copy(chkWithIncorrectOffset, b[:metasOffset])
+					copy(chkWithIncorrectOffset[metasOffset:], w.Bytes())
+
+					// decoding the problematic chunk should succeed
+					decodedChkWithIncorrectOffset, err := newByteChunk(chkWithIncorrectOffset, blockSize, testTargetSize, false)
+					require.NoError(t, err)
+
+					require.Len(t, decodedChkWithIncorrectOffset.blocks, len(chk.blocks))
+
+					// both chunks should have same log lines
+					origChunkItr, err := chk.Iterator(context.Background(), time.Unix(0, 0), time.Unix(0, math.MaxInt64), logproto.FORWARD, log.NewNoopPipeline().ForStream(labels.Labels{}))
+					require.NoError(t, err)
+
+					corruptChunkItr, err := decodedChkWithIncorrectOffset.Iterator(context.Background(), time.Unix(0, 0), time.Unix(0, math.MaxInt64), logproto.FORWARD, log.NewNoopPipeline().ForStream(labels.Labels{}))
+					require.NoError(t, err)
+
+					numEntriesFound := 0
+					for origChunkItr.Next() {
+						numEntriesFound++
+						require.True(t, corruptChunkItr.Next())
+						require.Equal(t, origChunkItr.At(), corruptChunkItr.At())
+					}
+
+					require.False(t, corruptChunkItr.Next())
+					require.Equal(t, 3, numEntriesFound)
 				})
 			}
 		})
